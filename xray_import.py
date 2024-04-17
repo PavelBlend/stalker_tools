@@ -3,9 +3,9 @@ import bpy, random
 
 def random_material_color(object):
     for material_slot in object.material_slots:
-        material = material_slot.material
-        red, green, blue = random.random(), random.random(), random.random()
-        material.diffuse_color = (red, green, blue)
+        material_slot.material.diffuse_color = (random.random(),
+                                                random.random(),
+                                                random.random())
 
 
 def assign_materials(object, material_indices):
@@ -50,11 +50,9 @@ def create_textre(object, image_name, path='T:\\', ext='dds'):
 
 
 def create_object(name='xray_object'):
-    mesh = bpy.data.meshes.new(name + '_mesh')
-    object = bpy.data.objects.new(name, mesh)
-    scene = bpy.context.scene
-    scene.objects.link(object)
-    return object, mesh
+    object = bpy.data.objects.new(name, bpy.data.meshes.new(name + '_mesh'))
+    bpy.context.scene.objects.link(object)
+    return object
 
 
 def crete_mesh(mesh_data):
@@ -68,8 +66,9 @@ def crete_mesh(mesh_data):
         som_property = mesh_data['som_property']
     else:
         som_property = None
-    
-    object, mesh = create_object()
+
+    object = create_object()
+    mesh = object.data
     mesh.from_pydata(vertices, (), triangles)
     if materials:
         create_materials(mesh, materials, som_property)
