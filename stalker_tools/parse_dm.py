@@ -1,35 +1,30 @@
-import struct
-from stalker_tools import xray_utils
-from stalker_tools.xray_utils import unpack_data as u
+from . import xray_utils
+from .xray_utils import unpack_data as u
 
 
-def parse_main(dm_data):
-    position = 0
-    shader_name, position = xray_utils.parse_string_nul(dm_data, position)
-    texture_name, position = xray_utils.parse_string_nul(dm_data, position)
-    dm_info, position = u('IffII', dm_data, position)
-    flags, min_scale, max_scale, vertex_count, index_count = dm_info
-    
-    vertices = []
-    uvs = []
-    for vertex_id in range(vertex_count):
-        vertex, position = u('5f', dm_data, position)
-        loc_x, loc_y, loc_z, uv_x, uv_y = vertex
-        vertices.append((loc_x, loc_z, loc_y))
-        uvs.append((uv_x, 1 - uv_y))
-    
-    triangles = []
-    for index_id in range(index_count//3):
-        face, position = u('3H', dm_data, position)
-        index_1, index_2, index_3 = face
-        triangles.append((index_1, index_3, index_2))
-
-    mesh_data = {}
-    mesh_data['vertices'] = vertices
-    mesh_data['triangles'] = triangles
-    mesh_data['uvs'] = uvs
-    mesh_data['images'] = texture_name
-    mesh_data['materials'] = None
-    mesh_data['material_indices'] = None
-    return mesh_data
+def parse_main(d, fmt='DM'):
+    shader, _p = xray_utils.parse_string(d, 0)
+    image, _p = xray_utils.parse_string(d, _p)
+    (flgs, minS, maxS, vCnt, iCnt), _p = u('IffII', d, _p)
+    dm_options = {'NoWaving' : flgs, 'MinScale' : minS, 'MaxScale' : maxS}
+    verts, uvs, faces = [], [], []
+    if fmt == 'DET':    # level.details files
+        for _ in range(vCnt):
+            (X, Y, Z, U, V), _p = u('5f', d, _p)
+            verts.append((X, Z, Y))
+            uvs.append((U, 1 - V))
+    elif fmt == 'DM':    # *.dm files
+        for _ in range(vCnt):
+            (X, Y, Z, U, V), _p = u('5f', d, _p)
+            verts.append((X, Z, Y))
+            uvs.append((U, V))
+    for _ in range(iCnt // 3):
+        (v1, v2, v3), _p = u('3H', d, _p)
+        faces.append((v1, v3, v2))
+    meshData = {'verts' : verts}
+    meshData['faces'] = faces
+    meshData['uvs'] = uvs
+    meshData['images'] = image
+    meshData['dm_options'] = dm_options
+    return meshData
 

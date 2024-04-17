@@ -1,40 +1,24 @@
-from stalker_tools import xray_utils, xray_import
-from stalker_tools.xray_utils import unpack_data as u
-I, H, B, f = 'I', 'H', 'B', 'f'
+from . import xray_utils, xray_import
+from .xray_utils import unpack_data as u
 
 
-def parse_main(s):
-    p = 0
-    block_id, p = u(I, s, p)
-    block_size, p = u(I, s, p)
-    wallmarks_count, p = u(I, s, p)
-    
-    for i in range(wallmarks_count):
-        set_count, p = u(I, s, p)
-        shader, p = xray_utils.parse_string_nul(s, p)
-        texture, p = xray_utils.parse_string_nul(s, p)
-        for i in range(set_count):
-            bounds, p = u(f*4, s, p)
-            vertex_count, p = u(I, s, p)
-            vertices = []
-            uvs = []
-            for i in range(vertex_count):
-                vertex, p = u(f*3+I+f*2, s, p)
-                vertices.append((vertex[0], vertex[2], vertex[1]))
-                uvs.append((vertex[4], 1 - vertex[5]))
-            # generate faces
-            triangles = []
-            index = 0
-            for i in range(vertex_count//3):
-                triangles.append((index, index+2, index+1))
-                index += 3
-
-            mesh_data = {}
-            mesh_data['vertices'] = vertices
-            mesh_data['triangles'] = triangles
-            mesh_data['uvs'] = uvs
-            mesh_data['images'] = texture
-            mesh_data['materials'] = None
-            mesh_data['material_indices'] = None
-            xray_import.crete_mesh(mesh_data)
+def parse_main(d):
+    (id, sz, wmCnt), _p = u('III', d, 0)
+    for i in range(wmCnt):
+        (setCnt, ), _p = u('I', d, _p)
+        shader, _p = xray_utils.parse_string(d, _p)
+        image, _p = xray_utils.parse_string(d, _p)
+        for ii in range(setCnt):
+            (bX, bY, bZ, bR, vCnt), _p = u('4fI', d, _p)
+            verts, uvs = [], []
+            for iii in range(vCnt):
+                (X, Y, Z, clr, U, V), _p = u('3fI2f', d, _p)
+                verts.append((X, Z, Y))
+                uvs.append((U, 1 - V))
+            faces = xray_utils.generate_face(len(verts))
+            meshData = {'verts' : verts}
+            meshData['faces'] = faces
+            meshData['uvs'] = uvs
+            meshData['images'] = image
+            xray_import.create_mesh(meshData)
 

@@ -1,4 +1,5 @@
-import bpy, random
+import bpy, random, time
+from . import xray_utils
 
 
 def random_material_color(object):
@@ -8,19 +9,34 @@ def random_material_color(object):
                                                 random.random())
 
 
-def assign_materials(object, material_indices):
+def assign_materials(object, material_indices, matSlots):
     for n, material in enumerate(material_indices):
-        index = int(object.material_slots[str(material)].path_from_id()[-2])
+        index = matSlots[material]
         object.data.polygons[n].material_index = index
 
 
-def create_materials(mesh, materials, som_property):
-    for n, i in enumerate(materials):
-        material = bpy.data.materials.new(str(i))
-        mesh.materials.append(material)
-        if som_property:
-            material.xray_2_sided = som_property[n][0]
-            material.xray_occ = som_property[n][1]
+def create_materials(mesh, materials, som_property, options):
+    matSlots = {}
+    if options == 'LOAD_GAME_MATERIAL':
+        from . import parse_gamemtl
+        path = bpy.context.scene.stalkerGameMtlDir
+        d = xray_utils.read_file(path)
+        if d:
+            mtls = parse_gamemtl.parse_main(d)
+            for n, i in enumerate(materials):
+                material = bpy.data.materials.new(mtls[i])
+                mesh.materials.append(material)
+                material.stalkerMatID = i
+                matSlots[i] = n
+    else:
+        for n, i in enumerate(materials):
+            material = bpy.data.materials.new(str(i))
+            mesh.materials.append(material)
+            matSlots[i] = n
+            if som_property:
+                material.stalker2sided = som_property[n][0]
+                material.stalkerOCC = som_property[n][1]
+    return matSlots
 
 
 def create_uvs(mesh, uvs):
@@ -32,19 +48,27 @@ def create_uvs(mesh, uvs):
             uv_layer[loop_index].uv = (uvs[vertex_index])
 
 
-def create_textre(object, image_name, path='T:\\', ext='dds'):
-    material = bpy.data.materials.new(image_name + '_Mat')
-    bpy.context.scene.objects.active = object
-    bpy.ops.object.material_slot_add()
-    object.material_slots[0].material = material
+def create_texture(object, image_name, ext='dds'):
+    path = bpy.context.scene.stalkerTexturesDir
+    if bpy.data.materials.get(image_name):
+        material = bpy.data.materials[image_name]
+    else:
+        material = bpy.data.materials.new(image_name)
+    object.data.materials.append(material)
     material.specular_intensity = 0
-    image = bpy.data.images.load(path + image_name + '.' + ext)
-    texture = bpy.data.textures.new(image_name + '_Tex', type = 'IMAGE')
-    texture.image = image
-    tex_slot = object.material_slots[0].material.texture_slots.add()
-    tex_slot.texture = texture
-    tex_slot.texture_coords = 'UV'
-    
+    if bpy.data.images.get(image_name + '.' + ext):
+        image = bpy.data.images[image_name + '.' + ext]
+    else:
+        image = bpy.data.images.load(path + image_name + '.' + ext)
+    if bpy.data.textures.get(image_name):
+        texture = bpy.data.textures[image_name]
+    else:
+        texture = bpy.data.textures.new(image_name, type = 'IMAGE')
+        texture.image = image
+    if not object.material_slots[0].material.texture_slots[0]:
+        tex_slot = object.material_slots[0].material.texture_slots.add()
+        tex_slot.texture = texture
+        tex_slot.texture_coords = 'UV'
     for i in object.data.uv_textures[0].data:
         i.image = image
 
@@ -55,28 +79,97 @@ def create_object(name='xray_object'):
     return object
 
 
-def crete_mesh(mesh_data):
-    vertices = mesh_data['vertices']
-    triangles = mesh_data['triangles']
-    materials = mesh_data['materials']
-    material_indices = mesh_data['material_indices']
-    uvs = mesh_data['uvs']
-    images = mesh_data['images']
-    if mesh_data.get('som_property'):
-        som_property = mesh_data['som_property']
-    else:
-        som_property = None
+def create_sectors(object, sectors, sectorsId):
+    bpy.context.scene.objects.active = object
+    for i in sectorsId:
+        object.vertex_groups.new(name=str(i))
+    for i in object.data.polygons:
+        sectorID = sectors[i.index]
+        for j in i.vertices:
+            object.vertex_groups[str(sectorID)].add((j,), 1.0, 'REPLACE')
 
-    object = create_object()
-    mesh = object.data
-    mesh.from_pydata(vertices, (), triangles)
-    if materials:
-        create_materials(mesh, materials, som_property)
-        random_material_color(object)
-    if material_indices:
-        assign_materials(object, material_indices)
-    if uvs:
-        create_uvs(mesh, uvs)
-    if images:
-        create_textre(object, images)
+
+def assign_dm_option(object, dm_options):
+    object.stalkerMinScale = dm_options['MinScale']
+    object.stalkerMaxScale = dm_options['MaxScale']
+    object.stalkerNoWaving = dm_options['NoWaving']
+
+
+def create_mesh(meshData):
+    if meshData:
+        verts = meshData.get('verts')
+        edges = meshData.get('edges')
+        faces = meshData.get('faces')
+        materials = meshData.get('materials')
+        material_indices = meshData.get('material_indices')
+        uvs = meshData.get('uvs')
+        images = meshData.get('images')
+        som_property = meshData.get('som_property')
+        sectors = meshData.get('sectors')
+        sectorsId = meshData.get('sectorsId')
+        options = meshData.get('options')
+        dm_options = meshData.get('dm_options')
+        object = create_object()
+        mesh = object.data
+        if not faces:
+            faces = ()
+        if not edges:
+            edges = ()
+        mesh.from_pydata(verts, edges, faces)
+        if materials:
+            matSlots = create_materials(mesh, materials, som_property, options)
+            random_material_color(object)
+        if material_indices:
+            assign_materials(object, material_indices, matSlots)
+        if uvs:
+            create_uvs(mesh, uvs)
+        if images:
+            create_texture(object, images)
+        if sectors and sectorsId:
+            create_sectors(object, sectors, sectorsId)
+        if dm_options:
+            assign_dm_option(object, dm_options)
+
+
+def parse_file(file_data, ext):
+    from . import (parse_cform,
+                   parse_details,
+                   parse_dm,
+                   parse_err,
+                   parse_hom,
+                   parse_object,
+                   parse_ogf,
+                   parse_som,
+                   parse_wallmarks,)
+    meshData = None
+    if ext == 'cform':
+        meshData = parse_cform.parse_main(file_data)
+    elif ext == 'details':
+        loadSlots = bpy.context.scene.stalkerLoadSlots
+        parse_details.parse_main(file_data, loadSlots)
+    elif ext == 'dm':
+        meshData = parse_dm.parse_main(file_data)
+    elif ext == 'hom':
+        meshData = parse_hom.parse_main(file_data)
+    elif ext == 'err':
+        meshData = parse_err.parse_main(file_data)
+    elif ext == 'wallmarks':
+        parse_wallmarks.parse_main(file_data)
+    elif ext == 'ogf':
+        parse_ogf.parse_main(file_data)
+    elif ext == 'object':
+        meshData = parse_object.parse_main(file_data)
+    elif ext == 'som':
+        meshData = parse_som.parse_main(file_data)
+    return meshData
+
+
+def import_file(absolute_path):
+    startTime = time.time()
+    ext = absolute_path.split('.')[-1]
+    file_data = xray_utils.read_file(absolute_path)
+    if file_data:
+        meshData = parse_file(file_data, ext)
+        create_mesh(meshData)
+    print('{:.6}s'.format(time.time() - startTime))
 

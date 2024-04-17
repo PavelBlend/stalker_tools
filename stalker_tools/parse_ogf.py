@@ -1,144 +1,133 @@
-from stalker_tools import xray_import, xray_utils
-from stalker_tools.xray_utils import unpack_data as u
+from . import xray_import, xray_utils
+from .xray_utils import unpack_data as u
 
 
-def ogf_data_parse(data):
-    data_size = len(data)
-    position = 0
-    parse_children = False
-    while position < data_size:
-        position, block_id, block_size = xray_utils.read_block(position, data)
-        if block_id == HEADER[0]:
-            parse_header(data[position : position + block_size])
-        elif block_id == TEXTURE[0]:
-            texture_name = parse_texture(data[position : position + block_size])
-        elif block_id == VERTICES[0]:
-            vertices, uvs = parse_vertices(data[position : position + block_size])
-        elif block_id == INDICES[0]:
-            triangles = parse_indices(data[position : position + block_size])
-        elif block_id == CHILDREN[0]:
-            parse_childrens(data[position : position + block_size])
-            parse_children = True
+def parse_main(d):
+    fmtVer = get_version(d)
+    if fmtVer == 4:
+        p, fileSz, parseChild = 0, len(d), False
+        while p < fileSz:
+            (id, sz), p = u('II', d, p)
+            if id == HEADER[0]:
+                parse_header(d[p : p + sz])
+            elif id == TEXTURE[0]:
+                imageName = parse_texture(d[p : p + sz])
+            elif id == VERTICES[0]:
+                verts, uvs = parse_vertices(d[p : p + sz])
+            elif id == INDICES[0]:
+                faces = parse_indices(d[p : p + sz])
+            elif id == CHILDREN[0]:
+                parse_childrens(d[p : p + sz])
+                parseChild = True
+            else:
+                # xray_utils.un_blk(id)
+                pass
+            p += sz
+        if not parseChild:
+            meshData = {'verts' : verts}
+            meshData['faces'] = faces
+            meshData['uvs'] = uvs
+            meshData['images'] = imageName
+            xray_import.create_mesh(meshData)
+    else:
+        xray_utils.un_ver('OGF', fmtVer)
+
+
+def get_version(d):
+    p, fileSz = 0, len(d)
+    while p < fileSz:
+        (id, sz), p = u('II', d, p)
+        if id == HEADER[0]:
+            (fmtVer, ), p = u('B', d, p)
+            return fmtVer
+
+
+def parse_header(d):
+    headerData, p = u('BBH10f', d, 0)
+    fmtVer, meshType, shaderID = headerData[0:3]
+    bBox = headerData[3:9]
+    bSphere = headerData[9:13]
+
+
+def parse_texture(d):
+    image, p = xray_utils.parse_string(d, 0)
+    shader, p = xray_utils.parse_string(d, p)
+    return image
+
+
+def parse_vertices(d):
+    ((vFmt, vCnt), p), verts, uvs = u('2I', d, 0), [], []
+    if vFmt == vf['OLD']:
+        for _ in range(vCnt):
+            (X, Y, Z, u1, u2, u3, U, V), p = u('8f', d, p)
+            verts.append((X, Z, Y))
+            uvs.append((U, 1 - V))
+    elif vFmt == vf['1L'] or vFmt == 1:
+        for _ in range(vCnt):
+            (X, Y, Z, nX, nY, nZ, tX, tY, tZ, bX, bY, bZ, U, V, matrix), p = \
+            u('14fI', d, p)
+            verts.append((X, Z, Y))
+            # normal = (nX, nZ, nX)
+            # t = (tX, tZ, tY)
+            # b = (bX, bZ, bY)
+            uvs.append((U, 1 - V))
+    elif vFmt == vf['2L'] or vFmt == 2:
+        for _ in range(vCnt):
+            vData, p = u('2H15f', d, p)
+            verts.append((vData[2], vData[4], vData[3]))
+            uvs.append((vData[15], 1 - vData[16]))
+    return verts, uvs
+
+
+def parse_indices(d):
+    ((iCnt, ), p), faces = u('I', d, 0), []
+    for _ in range(iCnt // 3):
+        (v1, v2, v3), p = u('3H', d, p)
+        faces.append((v1, v3, v2))
+    return faces
+
+
+def parse_swidata(d):
+    reserved, p = u('4I', d, 0)
+    (swiCnt, ), p = u('I', d, p)
+    (offset, tCnt, vCnt), p = u('IHH', d, p)
+    return offset // 3
+
+
+def parse_childrens(d):
+    p, blkSz = 0, len(d)
+    while p < blkSz:
+        (id, sz), p = u('II', d, p)
+        meshData = parse_children(d[p : p + sz])
+        p += sz
+        xray_import.create_mesh(meshData)
+
+
+def parse_children(d):
+    p, offset, blkSz = 0, None, len(d)
+    while p < blkSz:
+        (id, sz), p = u('II', d, p)
+        if id == HEADER[0]:
+            parse_header(d[p : p + sz])
+        elif id == TEXTURE[0]:
+            image = parse_texture(d[p : p + sz])
+        elif id == VERTICES[0]:
+            verts, uvs = parse_vertices(d[p : p + sz])
+        elif id == INDICES[0]:
+            faces = parse_indices(d[p : p + sz])
+        elif id == SWIDATA[0]:
+            offset = parse_swidata(d[p : p + sz])
         else:
+            # xray_utils.un_blk(id)
             pass
-            # print('! UNKNOWN BLOCK: {0}'.format(hex(block_id)))
-        position += block_size
-
-    if not parse_children:
-        mesh_data = {}
-        mesh_data['vertices'] = vertices
-        mesh_data['triangles'] = triangles
-        mesh_data['uvs'] = uvs
-        mesh_data['materials'] = None
-        mesh_data['images'] = texture_name
-        mesh_data['material_indices'] = None
-        xray_import.crete_mesh(mesh_data)
-
-
-def parse_header(data):
-    position = 0
-    header_data, position = u('BBH10f', data, position)
-    format_version, mesh_type, shader_id = header_data[0:3]
-    bbox = header_data[3:9]
-    bsphere = header_data[9:13]
-
-
-def parse_texture(data):
-    position = 0
-    texture_name, position = xray_utils.parse_string_nul(data, position)
-    shader_name, position = xray_utils.parse_string_nul(data, position)
-    return texture_name
-
-
-def parse_vertices(data):
-    position = 0
-    (format, vertex_count), position = u('2I', data, position)
-    vertices, uvs = [], []
-
-    if format == vertex_format['OLD']:
-        for i in range(vertex_count):
-            vertex_data, position = u('8f', data, position)
-            vertices.append((vertex_data[0], vertex_data[2], vertex_data[1]))
-            uvs.append((vertex_data[6], 1 - vertex_data[7]))
-    elif format == vertex_format['1L'] or vertex_format == 1:
-        for i in range(vertex_count):
-            vertex_data, position = u('14fI', data, position)
-            vertices.append((vertex_data[0], vertex_data[2], vertex_data[1]))
-            # normal = vertex_data[3:6]
-            # t = vertex_data[6:9]
-            # b = vertex_data[9:12]
-            uvs.append((vertex_data[12], 1 - vertex_data[13]))
-            # matrix = vertex_data[14]
-    elif format == vertex_format['2L'] or vertex_format == 2:
-        for i in range(vertex_count):
-            vertex_data, position = u('2H15f', data, position)
-            vertices.append((vertex_data[2], vertex_data[4], vertex_data[3]))
-            uvs.append((vertex_data[15], 1 - vertex_data[16]))
-        
-    return vertices, uvs
-
-
-def parse_indices(data):
-    position = 0
-    indices_count, position = u('I', data, position)
-    triangles = []
-
-    for i in range(indices_count // 3):
-        triangle, position = u('3H', data, position)
-        triangles.append((triangle[0], triangle[2], triangle[1]))
-
-    return triangles
-
-
-def parse_swidata(data):
-    position = 0
-    reserved, position = u('4I', data, position)
-    swidata_count, position = u('I', data, position)
-    swidata, position = u('IHH', data, position)
-    offset, num_tris, num_verts = swidata
-    return offset//3
-
-
-def parse_childrens(data):
-    position = 0
-    
-    while position < len(data):
-        position, mesh_id, mesh_size = xray_utils.read_block(position, data)
-        mesh_data = parse_children(data[position : position + mesh_size])
-        position += mesh_size
-        xray_import.crete_mesh(mesh_data)
-
-
-def parse_children(data):
-    position = 0
-    while position < len(data):
-        position, block_id, block_size = xray_utils.read_block(position, data)
-        if block_id == HEADER[0]:
-            parse_header(data[position : position + block_size])
-        elif block_id == TEXTURE[0]:
-            texture_name = parse_texture(data[position : position + block_size])
-        elif block_id == VERTICES[0]:
-            vertices, uvs = parse_vertices(data[position : position + block_size])
-        elif block_id == INDICES[0]:
-            triangles = parse_indices(data[position : position + block_size])
-        elif block_id == SWIDATA[0]:
-            offset = parse_swidata(data[position : position + block_size])
-        else:
-            pass
-            # print('! UNKNOWN SUBBLOCK: 0x9-{0}'.format(hex(block_id)))
-        position += block_size
-
+        p += sz
     if offset:
-        triangles = triangles[offset:]
-
-    mesh_data = {}
-    mesh_data['vertices'] = vertices
-    mesh_data['triangles'] = triangles
-    mesh_data['uvs'] = uvs
-    mesh_data['materials'] = None
-    mesh_data['images'] = texture_name
-    mesh_data['material_indices'] = None
-    return mesh_data
+        faces = faces[offset:]
+    meshData = {'verts' : verts}
+    meshData['faces'] = faces
+    meshData['uvs'] = uvs
+    meshData['images'] = image
+    return meshData
 
 
 # ogf format (chunks/blocks) ID, name
@@ -167,21 +156,22 @@ FASTPATH      = (22, 'FASTPATH')
 S_LODS        = (23, 'S_LODS')
 
 # no used
-mesh_type_names = {0  : 'MT_NORMAL',
-                   1  : 'MT_HIERRARHY',
-                   2  : 'MT_PROGRESSIVE',
-                   3  : 'MT_SKELETON_ANIM',
-                   4  : 'MT_SKELETON_GEOMDEF_PM',
-                   5  : 'MT_SKELETON_GEOMDEF_ST',
-                   6  : 'MT_LOD',
-                   7  : 'MT_TREE_ST',
-                   8  : 'MT_PARTICLE_EFFECT',
-                   9  : 'MT_PARTICLE_GROUP',
-                   10 : 'MT_SKELETON_RIGID',
-                   11 : 'MT_TREE_PM'}
+meshTypes = {0  : 'NORMAL',
+             1  : 'HIERRARHY',
+             2  : 'PROGRESSIVE',
+             3  : 'SKELETON_ANIM',
+             4  : 'SKELETON_GEOMDEF_PM',
+             5  : 'SKELETON_GEOMDEF_ST',
+             6  : 'LOD',
+             7  : 'TREE_ST',
+             8  : 'PARTICLE_EFFECT',
+             9  : 'PARTICLE_GROUP',
+             10 : 'SKELETON_RIGID',
+             11 : 'TREE_PM'}
 
+# vertex formats
+vf = {'1L'    : 0x12071980,
+      '2L'    : 0x240e3300,
+      'NL'    : 0x36154c80,
+      'OLD'    : 0x00000112}
 
-vertex_format = {'1L'    : 0x12071980,
-                 '2L'    : 0x240e3300,
-                 'NL'    : 0x36154c80,
-                 'OLD'    : 0x00000112}
